@@ -31,36 +31,35 @@ def _read_payload() -> dict[str, Any]:
 
 def _setup_commands() -> list[str]:
     project_root = Path(__file__).resolve().parent.parent
+    memora_repo = project_root / "vendor" / "Memora"
     memora_ref = "dec3f8f2444eace7004fc084abe1be9f3d88270e"
     return [
-        "MEMORA_HOME=${PI_MEMORA_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/pi-memora}",
-        "MEMORA_REPO=$MEMORA_HOME/Memora",
-        "mkdir -p \"$MEMORA_HOME\"",
+        f"MEMORA_REPO=\"{memora_repo}\"",
+        "mkdir -p \"$(dirname \"$MEMORA_REPO\")\"",
         "git init \"$MEMORA_REPO\"",
         "git -C \"$MEMORA_REPO\" remote add origin https://github.com/microsoft/Memora.git",
         f"git -C \"$MEMORA_REPO\" fetch --depth 1 origin {memora_ref}",
         "git -C \"$MEMORA_REPO\" checkout --detach FETCH_HEAD",
         f"uv run --project \"{project_root}\" python -c \"import sys; print(sys.version)\"",
-        "export OPENAI_API_KEY=...",
-        "export OPENAI_API_TYPE=openai",
     ]
 
 
+def _add_default_memora_checkout_to_path() -> None:
+    project_root = Path(__file__).resolve().parent.parent
+    memora_src = project_root / "vendor" / "Memora" / "src"
+    if memora_src.exists():
+        sys.path.insert(0, str(memora_src))
+
+
 def _openai_compat_base_url(kind: str) -> str | None:
-    specific = os.getenv(f"PI_MEMORA_{kind}_BASE_URL")
-    if specific:
-        return specific
     if kind == "EMBEDDING":
-        return os.getenv("OPENAI_EMBEDDING_BASE_URL") or os.getenv("OPENROUTER_EMBEDDING_BASE_URL")
+        return os.getenv("PI_MEMORA_EMBEDDING_BASE_URL") or os.getenv("OPENAI_EMBEDDING_BASE_URL") or os.getenv("OPENROUTER_EMBEDDING_BASE_URL")
     return os.getenv("OPENAI_BASE_URL") or os.getenv("OPENROUTER_BASE_URL")
 
 
 def _openai_compat_api_key(kind: str) -> str | None:
-    specific = os.getenv(f"PI_MEMORA_{kind}_API_KEY")
-    if specific:
-        return specific
     if kind == "EMBEDDING":
-        return os.getenv("OPENAI_EMBEDDING_API_KEY") or os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+        return os.getenv("PI_MEMORA_EMBEDDING_API_KEY") or os.getenv("OPENAI_EMBEDDING_API_KEY") or os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
     return os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
 
 
@@ -165,6 +164,7 @@ def _memora_imports():
             code=2,
         )
     try:
+        _add_default_memora_checkout_to_path()
         _install_optional_dependency_shims()
         _apply_openai_compat_patches()
         from memora.memora_client import MemoraClient
@@ -211,7 +211,7 @@ def _cfg(payload: dict[str, Any]):
     if not api_type:
         api_type = "openai" if os.getenv("OPENAI_API_KEY") else "azure"
 
-    model = os.getenv("PI_MEMORA_MODEL", os.getenv("OPENAI_MODEL", "gpt-4.1-mini"))
+    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
     embedding_model = os.getenv("PI_MEMORA_EMBEDDING_MODEL", os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"))
     collection = "pi_agent_memory"
     persist_path = str(store / collection)

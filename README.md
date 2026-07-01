@@ -1,20 +1,23 @@
 # pi-memora
 
-Memora-backed persistent memory for the Pi coding agent.
+Persistent memory for the [Pi coding agent](https://pi.dev), backed by [Microsoft Memora](https://github.com/microsoft/Memora).
 
-`pi-memora` connects Pi extensions to Microsoft Memora through a small uv-backed Python bridge. It can recall relevant memories before a prompt, capture completed turns after the agent finishes, and expose explicit memory tools to the model.
+`pi-memora` is a Pi extension package. It adds memory tools, recalls relevant memories into the current turn, and can capture finished turns back into Memora.
 
-## Features
+## What It Adds
 
-- Automatic recall before each user prompt.
-- Automatic capture after each agent turn.
-- Explicit tools: `memora_remember`, `memora_recall`, `memora_list`.
-- Slash command: `/memora`.
-- uv project for bridge dependencies.
-- OpenAI, Azure OpenAI, and OpenAI-compatible providers such as OpenRouter.
-- Project-scoped memory by default, with optional global scope.
+- `/memora` command for status, setup, recall, remember, list, and clear.
+- `memora_remember` tool for durable facts, decisions, preferences, and task outcomes.
+- `memora_recall` tool for semantic memory lookup.
+- `memora_list` tool for inspecting stored memories.
+- Optional automatic recall before each prompt.
+- Optional automatic capture after each agent run.
+
+The bridge is a uv project. Its Python dependencies live in `pyproject.toml`; it does not install Memora's full benchmark, RL, or local-Hugging-Face dependency set.
 
 ## Install
+
+Global install:
 
 ```bash
 pi install npm:pi-memora
@@ -26,67 +29,71 @@ Project-local install:
 pi install npm:pi-memora -l
 ```
 
-Local checkout install:
+Local checkout:
 
 ```bash
 pi install /path/to/pi-memora
 ```
 
-One-session published package trial:
+One-session trial:
 
 ```bash
 pi -e npm:pi-memora
 ```
 
-Local development:
-
-```bash
-pi -e /path/to/pi-memora/extensions/memora.ts
-```
-
 If Pi is already running after installation, run `/reload` or start a new Pi session.
 
-## Memora Runtime
+After installation, `/memora status` reports whether the Memora runtime is ready. `/memora setup` shows the exact setup commands for the installed package path.
 
-Memora currently ships as source, so the bridge needs a local Memora checkout. The checkout is pinned to the commit tested by this package and fetched shallowly.
+## Memora Checkout
+
+Memora is currently consumed as a pinned source checkout. Place it under the installed extension package at `vendor/Memora`.
+
+Find the installed package path:
 
 ```bash
-MEMORA_HOME=${PI_MEMORA_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/pi-memora}
-MEMORA_REPO=$MEMORA_HOME/Memora
-mkdir -p "$MEMORA_HOME"
+pi list
+```
+
+Then clone the pinned Memora commit:
+
+```bash
+PI_MEMORA_PACKAGE=/path/to/installed/pi-memora
+MEMORA_REPO=$PI_MEMORA_PACKAGE/vendor/Memora
+
+mkdir -p "$(dirname "$MEMORA_REPO")"
 git init "$MEMORA_REPO"
 git -C "$MEMORA_REPO" remote add origin https://github.com/microsoft/Memora.git
 git -C "$MEMORA_REPO" fetch --depth 1 origin dec3f8f2444eace7004fc084abe1be9f3d88270e
 git -C "$MEMORA_REPO" checkout --detach FETCH_HEAD
 ```
 
-The bridge itself is a uv project. Its minimal Python dependencies are declared in this package's `pyproject.toml`; it does not install Memora's full benchmark/RL/local-HF dependency set.
+For local development, the package path is this repo:
+
+```bash
+PI_MEMORA_PACKAGE=/Users/mac/Documents/pi-memora
+```
 
 ## Provider Setup
 
-Set provider settings in the environment before launching Pi.
+Memora's chat/extraction calls use Pi's active OpenAI-compatible model and Pi's resolved model auth. Configure the embedding model before launching Pi.
 
-### OpenAI
+OpenAI:
 
 ```bash
-export OPENAI_API_TYPE=openai
-export OPENAI_API_KEY=...
-export PI_MEMORA_MODEL=gpt-4.1-mini
 export PI_MEMORA_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-### OpenRouter
+OpenRouter:
 
 ```bash
-export OPENAI_API_TYPE=openai
-export OPENROUTER_API_KEY=...
-export PI_MEMORA_LLM_BASE_URL=https://openrouter.ai/api/v1
-export PI_MEMORA_MODEL=deepseek/deepseek-v4-pro
 export PI_MEMORA_EMBEDDING_BASE_URL=https://openrouter.ai/api/v1
 export PI_MEMORA_EMBEDDING_MODEL=qwen/qwen3-embedding-8b
 ```
 
-### Azure OpenAI
+If the embedding provider is different from Pi's active model provider, also set that provider's embedding API key, for example `PI_MEMORA_EMBEDDING_API_KEY` or `OPENROUTER_API_KEY`.
+
+Azure OpenAI:
 
 ```bash
 export OPENAI_API_TYPE=azure
@@ -100,43 +107,37 @@ export AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-small
 ```text
 /memora status
 /memora setup
-/memora recall repository architecture decisions
 /memora remember The project uses ChromaDB for local vector storage.
+/memora recall repository architecture decisions
 /memora list 10
 /memora clear clear
 ```
 
-The model can call:
-
-- `memora_remember`: store durable facts, decisions, preferences, procedures, and task outcomes.
-- `memora_recall`: retrieve relevant memories.
-- `memora_list`: list recent memories.
+The model may also call `memora_remember`, `memora_recall`, and `memora_list` directly.
 
 ## Configuration
 
-Keep the environment surface small:
+Package-specific environment variables:
 
-- `PI_MEMORA_HOME`: optional storage root. Defaults to `${XDG_DATA_HOME:-$HOME/.local/share}/pi-memora`.
-- `PI_MEMORA_SCOPE`: optional memory scope, `project` or `global`. Defaults to `project`.
+- `PI_MEMORA_HOME`: memory data root. Defaults to `${XDG_DATA_HOME:-$HOME/.local/share}/pi-memora`.
+- `PI_MEMORA_SCOPE`: `project` or `global`. Defaults to `project`.
 - `PI_MEMORA_AUTORECALL`: set to `0` to disable automatic recall.
 - `PI_MEMORA_AUTOCAPTURE`: set to `0` to disable automatic capture.
-- `PI_MEMORA_TOP_K`: optional recall count. Defaults to `5`.
-- `PI_MEMORA_MODEL`: chat model used by Memora extraction and update calls.
-- `PI_MEMORA_LLM_BASE_URL`: optional OpenAI-compatible chat base URL.
-- `PI_MEMORA_LLM_API_KEY`: optional chat API key. Falls back to `OPENAI_API_KEY` or `OPENROUTER_API_KEY`.
+- `PI_MEMORA_TOP_K`: recall count. Defaults to `5`.
 - `PI_MEMORA_EMBEDDING_MODEL`: embedding model. Defaults to `text-embedding-3-small`.
-- `PI_MEMORA_EMBEDDING_BASE_URL`: optional OpenAI-compatible embeddings base URL.
-- `PI_MEMORA_EMBEDDING_API_KEY`: optional embeddings API key. Falls back to `OPENAI_EMBEDDING_API_KEY`, `OPENROUTER_API_KEY`, or `OPENAI_API_KEY`.
+- `PI_MEMORA_EMBEDDING_BASE_URL`: OpenAI-compatible embeddings base URL.
+- `PI_MEMORA_EMBEDDING_API_KEY`: embeddings API key. Falls back to `OPENAI_EMBEDDING_API_KEY`, `OPENROUTER_API_KEY`, or `OPENAI_API_KEY`.
 
-OpenAI/Azure/OpenRouter variables are provider variables, not package-specific config.
+Provider-native variables such as `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, and `AZURE_OPENAI_ENDPOINT` are still used for embeddings when the embedding provider cannot use Pi's active model credential.
 
-## Operational Notes
+## Data And Safety
 
+- Memory data is stored under `PI_MEMORA_HOME`.
+- Memora source is checked out under `vendor/Memora` inside the installed package.
+- The extension does not read env files or write shell configuration.
 - Rotate any API key pasted into chat, logs, issue trackers, or support requests.
-- If you change embedding models for an existing collection, clear or rebuild that collection first. Vector dimensions can differ between models.
-- Autocapture can store sensitive conversation details. Disable with `PI_MEMORA_AUTOCAPTURE=0` when working with secrets or private data.
-- This package executes a Python bridge with your user permissions. Review source before installing third-party Pi packages.
-- `pi-memora` does not write into Pi's own package/config directories.
+- Disable autocapture with `PI_MEMORA_AUTOCAPTURE=0` when working with secrets or private data.
+- If you change embedding models, clear or rebuild the existing collection first. Vector dimensions may differ.
 
 ## Development
 
@@ -147,12 +148,9 @@ npm test
 npm pack --dry-run
 ```
 
-Live OpenRouter smoke test:
+Local extension smoke test:
 
 ```bash
-export OPENAI_API_TYPE=openai
-export PI_MEMORA_LLM_BASE_URL=https://openrouter.ai/api/v1
-export PI_MEMORA_MODEL=deepseek/deepseek-v4-pro
 export PI_MEMORA_EMBEDDING_BASE_URL=https://openrouter.ai/api/v1
 export PI_MEMORA_EMBEDDING_MODEL=qwen/qwen3-embedding-8b
 

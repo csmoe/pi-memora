@@ -1,6 +1,6 @@
 {
   "name": "pi-memora",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Memora-backed persistent memory extension for the Pi coding agent.",
   "main": "extensions/memora.ts",
   "scripts": {

@@ -31,7 +31,7 @@ const packageRoot = resolve(here, "..");
 const bridgePath = resolve(packageRoot, "bridge", "pi_memora_bridge.py");
 const defaultDataHome = process.env.XDG_DATA_HOME || `${process.env.HOME || ""}/.local/share`;
 const memoraHome = process.env.PI_MEMORA_HOME || `${defaultDataHome}/pi-memora`;
-const memoraRepo = `${memoraHome}/Memora`;
+const memoraRepo = resolve(packageRoot, "vendor", "Memora");
 const memoraSrc = `${memoraRepo}/src`;
 const defaultMemoraRef = "dec3f8f2444eace7004fc084abe1be9f3d88270e";
 
@@ -120,23 +120,27 @@ function setupText(result?: BridgeResult): string {
   return `${result?.error || "Memora bridge is not ready."}${detail}${setup}`;
 }
 
+function toolErrorText(result: BridgeResult): string {
+  if (result.setup?.length) {
+    return `${result.error || "Memora is not ready."}\n\nRun /memora setup for the copy-paste setup commands, then retry this tool.`;
+  }
+  return setupText(result);
+}
+
 function setupCommands(): string[] {
   return [
-    "MEMORA_HOME=${PI_MEMORA_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/pi-memora}",
-    "MEMORA_REPO=$MEMORA_HOME/Memora",
-    "mkdir -p \"$MEMORA_HOME\"",
+    `MEMORA_REPO="${memoraRepo}"`,
+    "mkdir -p \"$(dirname \"$MEMORA_REPO\")\"",
     "git init \"$MEMORA_REPO\"",
     "git -C \"$MEMORA_REPO\" remote add origin https://github.com/microsoft/Memora.git",
     `git -C "$MEMORA_REPO" fetch --depth 1 origin ${defaultMemoraRef}`,
     "git -C \"$MEMORA_REPO\" checkout --detach FETCH_HEAD",
     `uv run --project "${packageRoot}" python -c "import sys; print(sys.version)"`,
-    "export OPENAI_API_KEY=...",
-    "export OPENAI_API_TYPE=openai",
   ];
 }
 
-function bridgeProcess(action: string, payload: Record<string, unknown>): { command: string; args: string[]; env: NodeJS.ProcessEnv } {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+function bridgeProcess(action: string, payload: Record<string, unknown>, extraEnv: NodeJS.ProcessEnv = {}): { command: string; args: string[]; env: NodeJS.ProcessEnv } {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
   if (existsSync(memoraSrc)) {
     env.PYTHONPATH = env.PYTHONPATH ? `${memoraSrc}:${env.PYTHONPATH}` : memoraSrc;
   }
@@ -168,7 +172,7 @@ function parseBridgeOutput(stdout: string, stderr: string): BridgeResult {
   return { ok: false, error: "Memora bridge returned no JSON result.", detail: `${stdout}\n${stderr}`.trim() };
 }
 
-function runBridge(action: string, payload: Record<string, unknown>, signal?: AbortSignal): Promise<BridgeResult> {
+function runBridge(action: string, payload: Record<string, unknown>, signal?: AbortSignal, extraEnv?: NodeJS.ProcessEnv): Promise<BridgeResult> {
   return new Promise((resolvePromise) => {
     if (!existsSync(bridgePath)) {
       resolvePromise({ ok: false, error: `Bridge not found at ${bridgePath}` });
@@ -182,7 +186,7 @@ function runBridge(action: string, payload: Record<string, unknown>, signal?: Ab
       resolvePromise(result);
     };
 
-    const runner = bridgeProcess(action, payload);
+    const runner = bridgeProcess(action, payload, extraEnv);
     const child = spawn(runner.command, runner.args, {
       cwd: packageRoot,
       env: runner.env,
@@ -219,6 +223,25 @@ function basePayload(ctx: { cwd?: string }): Record<string, unknown> {
   };
 }
 
+async function piModelEnv(ctx: any): Promise<NodeJS.ProcessEnv> {
+  const model = ctx.model as { id?: string; api?: string; baseUrl?: string } | undefined;
+  if (!model?.id || !ctx.modelRegistry?.getApiKeyAndHeaders) return {};
+
+  const api = String(model.api || "");
+  if (api && !api.startsWith("openai-")) return {};
+
+  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+  if (!auth.ok || !auth.apiKey) return {};
+
+  return {
+    ...(auth.env || {}),
+    OPENAI_API_TYPE: "openai",
+    OPENAI_API_KEY: auth.apiKey,
+    OPENAI_MODEL: model.id,
+    ...(model.baseUrl ? { OPENAI_BASE_URL: model.baseUrl } : {}),
+  };
+}
+
 export default function memoraExtension(pi: ExtensionAPI) {
   pi.registerCommand("memora", {
     description: "Manage Memora-backed persistent memory",
@@ -239,39 +262,41 @@ export default function memoraExtension(pi: ExtensionAPI) {
       }
 
       if (command === "setup") {
-        ctx.ui.notify(setupText({
-          ok: false,
-          setup: setupCommands(),
-        }), "info");
+        ctx.ui.notify([
+          "Memora runtime is not installed automatically by pi install.",
+          "Run these commands once, then restart Pi or run /reload:",
+          "",
+          ...setupCommands(),
+        ].join("\n"), "info");
         return;
       }
 
       if (command === "recall") {
-        const result = await runBridge("query", { ...basePayload(ctx), query: text, top_k: topK }, ctx.signal);
+        const result = await runBridge("query", { ...basePayload(ctx), query: text, top_k: topK }, ctx.signal, await piModelEnv(ctx));
         ctx.ui.notify(result.ok ? formatEntries(result.entries) : setupText(result), result.ok ? "info" : "error");
         return;
       }
 
       if (command === "remember") {
-        const result = await runBridge("add", { ...basePayload(ctx), text, type: "doc" }, ctx.signal);
+        const result = await runBridge("add", { ...basePayload(ctx), text, type: "doc" }, ctx.signal, await piModelEnv(ctx));
         ctx.ui.notify(result.ok ? `Stored ${result.stored ?? 0} Memora entr${result.stored === 1 ? "y" : "ies"}.` : setupText(result), result.ok ? "info" : "error");
         return;
       }
 
       if (command === "list") {
         const limit = Number(rest[0]) || 20;
-        const result = await runBridge("list", { ...basePayload(ctx), limit }, ctx.signal);
+        const result = await runBridge("list", { ...basePayload(ctx), limit }, ctx.signal, await piModelEnv(ctx));
         ctx.ui.notify(result.ok ? formatEntries(result.entries) : setupText(result), result.ok ? "info" : "error");
         return;
       }
 
       if (command === "clear") {
-        const result = await runBridge("clear", { ...basePayload(ctx), confirm: rest[0] }, ctx.signal);
+        const result = await runBridge("clear", { ...basePayload(ctx), confirm: rest[0] }, ctx.signal, await piModelEnv(ctx));
         ctx.ui.notify(result.ok ? "Cleared Memora memory for this scope." : setupText(result), result.ok ? "info" : "error");
         return;
       }
 
-      const result = await runBridge("doctor", basePayload(ctx), ctx.signal);
+      const result = await runBridge("doctor", basePayload(ctx), ctx.signal, await piModelEnv(ctx));
       ctx.ui.notify(
         result.ok
           ? `Memora ready. Scope ${result.user_id}; ${result.count ?? 0} memories; home ${result.home}.`
@@ -295,10 +320,10 @@ export default function memoraExtension(pi: ExtensionAPI) {
       type: Type.Optional(Type.String({ description: "Memora memory type, defaults to doc." })),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const result = await runBridge("add", { ...basePayload(ctx), text: params.text, type: params.type || "doc" }, signal);
+      const result = await runBridge("add", { ...basePayload(ctx), text: params.text, type: params.type || "doc" }, signal, await piModelEnv(ctx));
       return {
         isError: !result.ok,
-        content: [{ type: "text", text: result.ok ? `Stored ${result.stored ?? 0} Memora entries.` : setupText(result) }],
+        content: [{ type: "text", text: result.ok ? `Stored ${result.stored ?? 0} Memora entries.` : toolErrorText(result) }],
         details: result,
       };
     },
@@ -317,10 +342,10 @@ export default function memoraExtension(pi: ExtensionAPI) {
       top_k: Type.Optional(Type.Number({ description: "Maximum memories to return." })),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const result = await runBridge("query", { ...basePayload(ctx), query: params.query, top_k: params.top_k || topK }, signal);
+      const result = await runBridge("query", { ...basePayload(ctx), query: params.query, top_k: params.top_k || topK }, signal, await piModelEnv(ctx));
       return {
         isError: !result.ok,
-        content: [{ type: "text", text: result.ok ? formatEntries(result.entries) : setupText(result) }],
+        content: [{ type: "text", text: result.ok ? formatEntries(result.entries) : toolErrorText(result) }],
         details: result,
       };
     },
@@ -334,10 +359,10 @@ export default function memoraExtension(pi: ExtensionAPI) {
       limit: Type.Optional(Type.Number({ description: "Maximum memories to list." })),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const result = await runBridge("list", { ...basePayload(ctx), limit: params.limit || 20 }, signal);
+      const result = await runBridge("list", { ...basePayload(ctx), limit: params.limit || 20 }, signal, await piModelEnv(ctx));
       return {
         isError: !result.ok,
-        content: [{ type: "text", text: result.ok ? formatEntries(result.entries) : setupText(result) }],
+        content: [{ type: "text", text: result.ok ? formatEntries(result.entries) : toolErrorText(result) }],
         details: result,
       };
     },
@@ -347,7 +372,7 @@ export default function memoraExtension(pi: ExtensionAPI) {
     if (!boolEnv("PI_MEMORA_AUTORECALL", true)) return;
     const prompt = String(event.prompt || "").trim();
     if (!prompt) return;
-    const result = await runBridge("query", { ...basePayload(ctx), query: prompt, top_k: topK }, ctx.signal);
+    const result = await runBridge("query", { ...basePayload(ctx), query: prompt, top_k: topK }, ctx.signal, await piModelEnv(ctx));
     if (!result.ok || !result.entries?.length) return;
     const memories = formatEntries(result.entries);
     return {
@@ -364,6 +389,6 @@ export default function memoraExtension(pi: ExtensionAPI) {
       text: transcript,
       type: "doc",
       metadata: { captured_at: new Date().toISOString(), capture: "agent_end" },
-    }, ctx.signal);
+    }, ctx.signal, await piModelEnv(ctx));
   });
 }
