@@ -43,40 +43,34 @@ pi -e npm:pi-memora
 
 If Pi is already running after installation, run `/reload` or start a new Pi session.
 
-After installation, `/memora status` reports whether the Memora runtime is ready. `/memora setup` shows the exact setup commands for the installed package path.
+After installation, `/memora status` reports whether the Memora runtime is ready. `/memora setup` installs the pinned Memora runtime under the installed package path.
 
-## Memora Checkout
+## Before Launching Pi
 
-Memora is currently consumed as a pinned source checkout. Place it under the installed extension package at `vendor/Memora`.
+Set the embedding provider environment in the same shell before starting Pi. The extension does not read env files or edit shell startup files.
 
-Find the installed package path:
+Required:
+
+- An embedding model name.
+- An embedding API key, unless the embedding provider can use the same credential Pi already uses for the active model.
+- An embedding base URL when the provider is not OpenAI's default API.
+
+Then start Pi from that shell:
 
 ```bash
-pi list
+pi
 ```
 
-Then clone the pinned Memora commit:
+After Pi starts, run:
 
-```bash
-PI_MEMORA_PACKAGE=/path/to/installed/pi-memora
-MEMORA_REPO=$PI_MEMORA_PACKAGE/vendor/Memora
-
-mkdir -p "$(dirname "$MEMORA_REPO")"
-git init "$MEMORA_REPO"
-git -C "$MEMORA_REPO" remote add origin https://github.com/microsoft/Memora.git
-git -C "$MEMORA_REPO" fetch --depth 1 origin dec3f8f2444eace7004fc084abe1be9f3d88270e
-git -C "$MEMORA_REPO" checkout --detach FETCH_HEAD
-```
-
-For local development, the package path is this repo:
-
-```bash
-PI_MEMORA_PACKAGE=/Users/mac/Documents/pi-memora
+```text
+/memora setup
+/memora status
 ```
 
 ## Provider Setup
 
-Memora's chat/extraction calls use Pi's active OpenAI-compatible model and Pi's resolved model auth. Configure the embedding model before launching Pi.
+Memora's chat/extraction calls use Pi's active OpenAI-compatible model and Pi's resolved model auth. Only configure embeddings here.
 
 OpenAI:
 
@@ -89,9 +83,10 @@ OpenRouter:
 ```bash
 export PI_MEMORA_EMBEDDING_BASE_URL=https://openrouter.ai/api/v1
 export PI_MEMORA_EMBEDDING_MODEL=qwen/qwen3-embedding-8b
+export PI_MEMORA_EMBEDDING_API_KEY=...
 ```
 
-If the embedding provider is different from Pi's active model provider, also set that provider's embedding API key, for example `PI_MEMORA_EMBEDDING_API_KEY` or `OPENROUTER_API_KEY`.
+If the embedding provider is different from Pi's active model provider, set that provider's embedding API key with `PI_MEMORA_EMBEDDING_API_KEY`.
 
 Azure OpenAI:
 
@@ -126,9 +121,9 @@ Package-specific environment variables:
 - `PI_MEMORA_TOP_K`: recall count. Defaults to `5`.
 - `PI_MEMORA_EMBEDDING_MODEL`: embedding model. Defaults to `text-embedding-3-small`.
 - `PI_MEMORA_EMBEDDING_BASE_URL`: OpenAI-compatible embeddings base URL.
-- `PI_MEMORA_EMBEDDING_API_KEY`: embeddings API key. Falls back to `OPENAI_EMBEDDING_API_KEY`, `OPENROUTER_API_KEY`, or `OPENAI_API_KEY`.
+- `PI_MEMORA_EMBEDDING_API_KEY`: embeddings API key.
 
-Provider-native variables such as `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, and `AZURE_OPENAI_ENDPOINT` are still used for embeddings when the embedding provider cannot use Pi's active model credential.
+Provider-native variables such as `AZURE_OPENAI_ENDPOINT` are still used for provider-specific embedding configuration.
 
 ## Data And Safety
 
@@ -138,21 +133,3 @@ Provider-native variables such as `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, and `A
 - Rotate any API key pasted into chat, logs, issue trackers, or support requests.
 - Disable autocapture with `PI_MEMORA_AUTOCAPTURE=0` when working with secrets or private data.
 - If you change embedding models, clear or rebuild the existing collection first. Vector dimensions may differ.
-
-## Development
-
-```bash
-npm install
-uv lock
-npm test
-npm pack --dry-run
-```
-
-Local extension smoke test:
-
-```bash
-export PI_MEMORA_EMBEDDING_BASE_URL=https://openrouter.ai/api/v1
-export PI_MEMORA_EMBEDDING_MODEL=qwen/qwen3-embedding-8b
-
-pi -e ./extensions/memora.ts --no-builtin-tools --tools memora_recall -p "Use memora_recall to summarize pi-memora smoke test memory."
-```

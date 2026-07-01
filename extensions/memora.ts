@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatSize, truncateHead, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -139,6 +139,74 @@ function setupCommands(): string[] {
   ];
 }
 
+function runCommand(command: string, args: string[], options: { cwd?: string } = {}): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolvePromise) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd || packageRoot,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => resolvePromise({ ok: false, output: error.message }));
+    child.on("close", (code) => resolvePromise({ ok: code === 0, output: `${stdout}\n${stderr}`.trim() }));
+  });
+}
+
+function isEmptyDir(path: string): boolean {
+  try {
+    return readdirSync(path).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function runSetup(): Promise<BridgeResult> {
+  const parent = dirname(memoraRepo);
+  const existing = existsSync(memoraRepo);
+  const gitDir = resolve(memoraRepo, ".git");
+  if (existing && !existsSync(gitDir) && !isEmptyDir(memoraRepo)) {
+    return {
+      ok: false,
+      error: `Refusing to modify non-git non-empty directory: ${memoraRepo}`,
+      setup: setupCommands(),
+    };
+  }
+
+  const steps: Array<[string, string[]]> = [
+    ["mkdir", ["-p", parent]],
+    ["git", ["init", memoraRepo]],
+    ["git", ["-C", memoraRepo, "remote", "remove", "origin"]],
+    ["git", ["-C", memoraRepo, "remote", "add", "origin", "https://github.com/microsoft/Memora.git"]],
+    ["git", ["-C", memoraRepo, "fetch", "--depth", "1", "origin", defaultMemoraRef]],
+    ["git", ["-C", memoraRepo, "checkout", "--detach", "FETCH_HEAD"]],
+    ["uv", ["run", "--project", packageRoot, "python", "-c", "import sys; print(sys.version)"]],
+  ];
+
+  const logs: string[] = [];
+  for (const [command, args] of steps) {
+    const label = `${command} ${args.join(" ")}`;
+    const result = await runCommand(command, args);
+    if (!result.ok && !(command === "git" && args.includes("remove"))) {
+      return {
+        ok: false,
+        error: `Setup failed while running: ${label}`,
+        detail: result.output,
+        setup: setupCommands(),
+      };
+    }
+    logs.push(`ok ${label}`);
+  }
+
+  return {
+    ok: true,
+    detail: logs.join("\n"),
+  };
+}
+
 function bridgeProcess(action: string, payload: Record<string, unknown>, extraEnv: NodeJS.ProcessEnv = {}): { command: string; args: string[]; env: NodeJS.ProcessEnv } {
   const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
   if (existsSync(memoraSrc)) {
@@ -262,12 +330,14 @@ export default function memoraExtension(pi: ExtensionAPI) {
       }
 
       if (command === "setup") {
-        ctx.ui.notify([
-          "Memora runtime is not installed automatically by pi install.",
-          "Run these commands once, then restart Pi or run /reload:",
-          "",
-          ...setupCommands(),
-        ].join("\n"), "info");
+        ctx.ui.notify("Setting up Memora runtime under vendor/Memora...", "info");
+        const result = await runSetup();
+        ctx.ui.notify(
+          result.ok
+            ? `Memora runtime is ready at ${memoraRepo}.`
+            : setupText(result),
+          result.ok ? "info" : "error",
+        );
         return;
       }
 
